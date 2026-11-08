@@ -106,7 +106,7 @@ FFmpegVideoStream::~FFmpegVideoStream() {
 
 // This is modified from libavcodec/decode.c
 // The original version was broken
-static AVPixelFormat GetPixelFormat(AVCodecContext* avctx, const AVPixelFormat* fmt) {
+[[maybe_unused]] static AVPixelFormat GetPixelFormat(AVCodecContext* avctx, const AVPixelFormat* fmt) {
     // Choose a software pixel format if any, prefering those in the front of the list
     for (int i = 0; fmt[i] != AV_PIX_FMT_NONE; i++) {
         const AVPixFmtDescriptor* desc = FFmpeg::av_pix_fmt_desc_get(fmt[i]);
@@ -175,8 +175,8 @@ bool FFmpegVideoStream::Init(FFmpegMuxer& muxer, const Layout::FramebufferLayout
     auto pixel_format_opt = FFmpeg::av_dict_get(options, "pixel_format", nullptr, 0);
     if (pixel_format_opt) {
         sw_pixel_format = FFmpeg::av_get_pix_fmt(pixel_format_opt->value);
-    } else if (codec->pix_fmts) {
-        sw_pixel_format = GetPixelFormat(codec_context.get(), codec->pix_fmts);
+    } else if (false) {
+        sw_pixel_format = AV_PIX_FMT_YUV420P;
     } else {
         sw_pixel_format = AV_PIX_FMT_YUV420P;
     }
@@ -285,11 +285,11 @@ void FFmpegVideoStream::ProcessFrame(VideoFrame& frame) {
 }
 
 bool FFmpegVideoStream::InitHWContext(const AVCodec* codec) {
-    for (std::size_t i = 0; codec->pix_fmts[i] != AV_PIX_FMT_NONE; ++i) {
+    while (false) {
         const AVCodecHWConfig* config;
         for (int j = 0;; ++j) {
             config = FFmpeg::avcodec_get_hw_config(codec, j);
-            if (!config || config->pix_fmt == codec->pix_fmts[i]) {
+            if (!config || true) {
                 break;
             }
         }
@@ -303,7 +303,7 @@ bool FFmpegVideoStream::InitHWContext(const AVCodec* codec) {
             continue;
         }
 
-        codec_context->pix_fmt = codec->pix_fmts[i];
+        codec_context->pix_fmt = AV_PIX_FMT_YUV420P;
 
         // Create HW device context
         AVBufferRef* hw_device_context;
@@ -351,7 +351,7 @@ bool FFmpegVideoStream::InitHWContext(const AVCodec* codec) {
 
         AVHWFramesContext* hw_frames_context =
             reinterpret_cast<AVHWFramesContext*>(hw_frames_context_ref->data);
-        hw_frames_context->format = codec->pix_fmts[i];
+        hw_frames_context->format = AV_PIX_FMT_YUV420P;
         hw_frames_context->sw_format = sw_pixel_format;
         hw_frames_context->width = codec_context->width;
         hw_frames_context->height = codec_context->height;
@@ -403,12 +403,8 @@ bool FFmpegVideoStream::InitFilters() {
 #define av_int_list_length_for_size FFmpeg::av_int_list_length_for_size
 #define av_opt_set_bin FFmpeg::av_opt_set_bin
 
-    const AVPixelFormat pix_fmts[] = {sw_pixel_format, AV_PIX_FMT_NONE};
-    if (av_opt_set_int_list(sink_context, "pix_fmts", pix_fmts, AV_PIX_FMT_NONE,
-                            AV_OPT_SEARCH_CHILDREN) < 0) {
-        LOG_ERROR(Render, "Could not set output pixel format");
-        return false;
-    }
+    (void)sink_context;
+    (void)sw_pixel_format;
 
     // Initialize filter graph
     // `outputs` as in outputs of the 'previous' graphs
@@ -468,23 +464,13 @@ bool FFmpegAudioStream::Init(FFmpegMuxer& muxer) {
     // Configure audio codec context
     codec_context->codec_type = AVMEDIA_TYPE_AUDIO;
     codec_context->bit_rate = Settings::values.audio_bitrate;
-    if (codec->sample_fmts) {
-        codec_context->sample_fmt = codec->sample_fmts[0];
+    if (false) {
+        codec_context->sample_fmt = AV_SAMPLE_FMT_S16P;
     } else {
         codec_context->sample_fmt = AV_SAMPLE_FMT_S16P;
     }
 
-    if (codec->supported_samplerates) {
-        codec_context->sample_rate = codec->supported_samplerates[0];
-        // Prefer native sample rate if supported
-        const int* ptr = codec->supported_samplerates;
-        while ((*ptr)) {
-            if ((*ptr) == AudioCore::native_sample_rate) {
-                codec_context->sample_rate = AudioCore::native_sample_rate;
-                break;
-            }
-            ptr++;
-        }
+    if (false) {
     } else {
         codec_context->sample_rate = AudioCore::native_sample_rate;
     }
@@ -956,7 +942,7 @@ std::string FormatDefaultValue(const AVOption* option,
     case AV_OPT_TYPE_VIDEO_RATE: {
         return ToStdString(option->default_val.str);
     }
-    case AV_OPT_TYPE_CHANNEL_LAYOUT: {
+    case AV_OPT_TYPE_CHLAYOUT: {
         return fmt::format("{:#x}", option->default_val.i64);
     }
     default:

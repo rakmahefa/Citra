@@ -129,6 +129,10 @@ void Swapchain::Present() {
 
 void Swapchain::FindPresentFormat() {
     const auto formats = instance.GetPhysicalDevice().getSurfaceFormatsKHR(surface);
+    if (formats.empty()) {
+        LOG_ERROR(Render_Vulkan, "Surface reported no formats");
+        UNREACHABLE_MSG("Unable to query surface formats!");
+    }
 
     // If there is a single undefined surface format, the device doesn't care, so we'll just use
     // RGBA.
@@ -150,11 +154,22 @@ void Swapchain::FindPresentFormat() {
         return;
     }
 
-    UNREACHABLE_MSG("Unable to find required swapchain format!");
+    // Fall back to the first advertised format when preferred formats are not available.
+    surface_format = formats[0];
+
+    if (surface_format.format == vk::Format::eUndefined) {
+        surface_format.format = vk::Format::eR8G8B8A8Unorm;
+        surface_format.colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
+    }
 }
 
 void Swapchain::SetPresentMode() {
     const auto modes = instance.GetPhysicalDevice().getSurfacePresentModesKHR(surface);
+    if (modes.empty()) {
+        LOG_ERROR(Render_Vulkan, "Surface reported no present modes, falling back to FIFO");
+        present_mode = vk::PresentModeKHR::eFifo;
+        return;
+    }
     const bool use_vsync = Settings::values.use_vsync_new.GetValue();
     const auto find_mode = [&modes](vk::PresentModeKHR requested) {
         const auto it =

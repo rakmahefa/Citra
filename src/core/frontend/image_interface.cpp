@@ -5,6 +5,7 @@
 #define DDSKTX_IMPLEMENT
 #include <dds-ktx.h>
 #include <lodepng.h>
+#include <cstring>
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "core/frontend/image_interface.h"

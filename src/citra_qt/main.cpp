@@ -287,8 +287,9 @@ GMainWindow::GMainWindow(Core::System& system_)
     if (physical_devices.empty()) {
         QMessageBox::warning(this, tr("No Suitable Vulkan Devices Detected"),
                              tr("Vulkan initialization failed during boot.<br/>"
-                                "Your GPU may not support Vulkan 1.1, or you do not "
-                                "have the latest graphics driver."));
+                                "Your GPU may not support Vulkan 1.1, the driver/ICD may be missing, "
+                                "or /dev/dri may be inaccessible.<br/>"
+                                "See the Citra log for the exact Vulkan loader/ICD/version error."));
     }
 #endif
 
