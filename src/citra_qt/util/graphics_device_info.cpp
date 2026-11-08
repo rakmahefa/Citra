@@ -4,6 +4,11 @@
 
 #include "citra_qt/util/graphics_device_info.h"
 
+#include "common/logging/log.h"
+#ifdef ENABLE_VULKAN
+#include "video_core/renderer_vulkan/vk_instance.h"
+#include <vulkan/vulkan.hpp>
+#endif
 #ifdef ENABLE_OPENGL
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
@@ -36,12 +41,18 @@ std::vector<QString> GetVulkanPhysicalDevices() {
         Vulkan::Instance instance{};
         const auto physical_devices = instance.GetPhysicalDevices();
 
+        LOG_INFO(Frontend, "Vulkan detection: found {} physical device(s)", physical_devices.size());
         for (const vk::PhysicalDevice physical_device : physical_devices) {
-            const QString name = QString::fromUtf8(physical_device.getProperties().deviceName, -1);
+            const vk::PhysicalDeviceProperties props = physical_device.getProperties();
+            const QString name = QString::fromUtf8(props.deviceName, -1);
+            LOG_INFO(Frontend, "Vulkan device: {} (API {}.{})", name.toStdString(),
+                     VK_VERSION_MAJOR(props.apiVersion), VK_VERSION_MINOR(props.apiVersion));
             result.push_back(name);
         }
-    } catch (const std::runtime_error& err) {
-        LOG_ERROR(Frontend, "Error occured while querying for physical devices: {}", err.what());
+    } catch (const std::exception& err) {
+        LOG_ERROR(Frontend, "Error occurred while querying for Vulkan physical devices: {}", err.what());
+    } catch (...) {
+        LOG_ERROR(Frontend, "Unknown error occurred while querying for Vulkan physical devices");
     }
 
     return result;

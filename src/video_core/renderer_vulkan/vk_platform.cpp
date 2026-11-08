@@ -14,6 +14,7 @@
 #define VK_USE_PLATFORM_XLIB_KHR
 #endif
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <boost/container/static_vector.hpp>
@@ -29,8 +30,9 @@ namespace Vulkan {
 
 namespace {
 static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
-    const VkDebugUtilsMessengerCallbackDataEXT* callback_data, void* user_data) {
+    vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+    vk::Flags<vk::DebugUtilsMessageTypeFlagBitsEXT> type,
+    const vk::DebugUtilsMessengerCallbackDataEXT* callback_data, void* user_data) {
 
     switch (callback_data->messageIdNumber) {
     case 0x609a13b: // Vertex attribute at location not consumed by shader
@@ -41,14 +43,14 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
 
     Common::Log::Level level{};
     switch (severity) {
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
+    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eError:
         level = Common::Log::Level::Error;
         break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
+    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning:
         level = Common::Log::Level::Info;
         break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
+    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo:
+    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose:
         level = Common::Log::Level::Debug;
         break;
     default:
@@ -62,14 +64,15 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
     return VK_FALSE;
 }
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(VkDebugReportFlagsEXT flags,
-                                                          VkDebugReportObjectTypeEXT objectType,
+static VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(vk::Flags<vk::DebugReportFlagBitsEXT> flags,
+                                                          vk::DebugReportObjectTypeEXT objectType,
                                                           uint64_t object, std::size_t location,
                                                           int32_t messageCode,
                                                           const char* pLayerPrefix,
                                                           const char* pMessage, void* pUserData) {
 
-    const VkDebugReportFlagBitsEXT severity = static_cast<VkDebugReportFlagBitsEXT>(flags);
+    const VkDebugReportFlagBitsEXT severity =
+        static_cast<VkDebugReportFlagBitsEXT>(static_cast<uint32_t>(flags));
     Common::Log::Level level{};
     switch (severity) {
     case VK_DEBUG_REPORT_ERROR_BIT_EXT:
@@ -128,6 +131,9 @@ std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
 vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::EmuWindow& emu_window) {
     const auto& window_info = emu_window.GetWindowInfo();
     vk::SurfaceKHR surface{};
+
+    LOG_INFO(Render_Vulkan, "Creating Vulkan surface for window system type {}",
+             static_cast<int>(window_info.type));
 
 #if defined(VK_USE_PLATFORM_WIN32_KHR)
     if (window_info.type == Frontend::WindowSystemType::Windows) {
@@ -294,12 +300,17 @@ vk::UniqueInstance CreateInstance(const Common::DynamicLibrary& library,
     const u32 available_version = VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumerateInstanceVersion
                                       ? vk::enumerateInstanceVersion()
                                       : VK_API_VERSION_1_0;
-    if (available_version < TargetVulkanApiVersion) {
+    if (available_version < MinimumVulkanApiVersion) {
         throw std::runtime_error(fmt::format(
             "Vulkan {}.{} is required, but only {}.{} is supported by instance!",
-            VK_VERSION_MAJOR(TargetVulkanApiVersion), VK_VERSION_MINOR(TargetVulkanApiVersion),
+            VK_VERSION_MAJOR(MinimumVulkanApiVersion), VK_VERSION_MINOR(MinimumVulkanApiVersion),
             VK_VERSION_MAJOR(available_version), VK_VERSION_MINOR(available_version)));
     }
+
+    // Keep 1.1 as the mandatory minimum, but negotiate a newer application version when
+    // the loader/runtime supports it. This avoids unnecessarily restricting recent drivers.
+    const u32 negotiated_instance_version =
+        std::min(available_version, PreferredVulkanApiVersion);
 
     const auto extensions = GetInstanceExtensions(window_type, enable_validation);
 
@@ -308,7 +319,7 @@ vk::UniqueInstance CreateInstance(const Common::DynamicLibrary& library,
         .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
         .pEngineName = "Citra Vulkan",
         .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion = TargetVulkanApiVersion,
+        .apiVersion = negotiated_instance_version,
     };
 
     boost::container::static_vector<const char*, 2> layers;

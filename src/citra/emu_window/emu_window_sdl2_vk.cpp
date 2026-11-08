@@ -24,7 +24,7 @@ EmuWindow_SDL2_VK::EmuWindow_SDL2_VK(Core::System& system, bool fullscreen, bool
                          SDL_WINDOWPOS_UNDEFINED, // x position
                          SDL_WINDOWPOS_UNDEFINED, // y position
                          Core::kScreenTopWidth, Core::kScreenTopHeight + Core::kScreenBottomHeight,
-                         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+                         SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     SDL_SysWMinfo wm;
     SDL_VERSION(&wm.version);
     if (SDL_GetWindowWMInfo(render_window, &wm) == SDL_FALSE) {
