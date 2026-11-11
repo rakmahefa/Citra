@@ -1,4 +1,3 @@
-
 name: build
 
 on:
@@ -62,11 +61,42 @@ jobs:
           path: build/externals/linuxdeploy
           key: citra-linuxdeploy-ubuntu-24.04-x86_64-v1
 
-      # Linux dependencies (Utilise les paquets pré-installés sur ubuntu-24.04)
-      - name: Check dependencies (Linux)
+      # Linux : miroir apt rapide + timeouts courts pour éviter les blocages
+      - name: Configure apt mirrors (Linux)
         if: runner.os == 'Linux'
         run: |
-          echo "Dependencies are pre-installed on ubuntu-24.04 runner."
+          # Remplace la liste de miroirs (azure.archive.ubuntu.com est souvent lent/en timeout)
+          printf '%s\tpriority:1\n' 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
+          printf '%s\tpriority:2\n' 'http://mirrors.edge.kernel.org/ubuntu/' | sudo tee -a /etc/apt/apt-mirrors.txt
+          printf '%s\tpriority:3\n' 'http://azure.archive.ubuntu.com/ubuntu/' | sudo tee -a /etc/apt/apt-mirrors.txt
+          # Retries + timeouts courts : apt abandonne vite un miroir lent
+          sudo tee /etc/apt/apt.conf.d/80-ci-tuning >/dev/null <<'EOF'
+          Acquire::Retries "5";
+          Acquire::http::Timeout "15";
+          Acquire::https::Timeout "15";
+          Acquire::Queue-Mode "host";
+          APT::Install-Recommends "false";
+          EOF
+          # Pas besoin de man-db / docs : accélère l'installation
+          sudo tee /etc/dpkg/dpkg.cfg.d/01-nodoc >/dev/null <<'EOF'
+          path-exclude /usr/share/doc/*
+          path-exclude /usr/share/man/*
+          path-exclude /usr/share/info/*
+          EOF
+
+      # Linux dependencies
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            patchelf file desktop-file-utils \
+            qt6-base-dev qt6-multimedia-dev \
+            libgl-dev libegl-dev \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
+            libx11-dev libxext-dev libxrandr-dev libxi-dev libxrender-dev \
+            libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev
 
       # Configure
       - name: Configure (Linux)
