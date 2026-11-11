@@ -104,12 +104,15 @@ jobs:
       # Configure
       - name: Configure (Linux)
         if: runner.os == 'Linux'
-        run: >-
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DENABLE_TESTS=OFF
-          -DCITRA_WARNINGS_AS_ERRORS=OFF
-          -DENABLE_LTO=OFF
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DENABLE_TESTS=OFF \
+            -DCITRA_WARNINGS_AS_ERRORS=OFF \
+            -DENABLE_LTO=OFF 2>&1 | tee configure.log
 
       - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
@@ -122,20 +125,24 @@ jobs:
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           -DENABLE_TESTS=OFF
           -DCITRA_WARNINGS_AS_ERRORS=OFF
           -DENABLE_LTO=OFF
 
       - name: Configure (macOS)
         if: runner.os == 'macOS'
-        run: >-
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DENABLE_TESTS=OFF
-          -DCITRA_WARNINGS_AS_ERRORS=OFF
-          -DENABLE_LTO=OFF
-          -DENABLE_OPENGL=ON
-          -DENABLE_VULKAN=OFF
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DENABLE_TESTS=OFF \
+            -DCITRA_WARNINGS_AS_ERRORS=OFF \
+            -DENABLE_LTO=OFF \
+            -DENABLE_OPENGL=ON \
+            -DENABLE_VULKAN=OFF 2>&1 | tee configure.log
 
       # Build
       - name: Build (Windows)
@@ -188,13 +195,18 @@ jobs:
           ls -lh pkg-out/
 
       # Diagnostic en cas d'échec
-      - name: Show CMake logs on failure
+      - name: Show CMake errors on failure
         if: failure()
         shell: bash
         run: |
-          tail -n 80 build/CMakeFiles/CMakeConfigureLog.yaml 2>/dev/null || true
-          tail -n 80 build/CMakeFiles/CMakeError.log 2>/dev/null || true
-          tail -n 80 build/CMakeFiles/CMakeOutput.log 2>/dev/null || true
+          if [ -f configure.log ]; then
+            echo "===== CMake Error (configure.log) ====="
+            grep -n -B3 -A15 -E "CMake Error|Git submodule|Compatibility with CMake" configure.log | head -n 150 || true
+            echo "===== Fin de configure.log ====="
+            tail -n 40 configure.log
+          fi
+          tail -n 60 build/CMakeFiles/CMakeConfigureLog.yaml 2>/dev/null || true
+          tail -n 60 build/CMakeFiles/CMakeError.log 2>/dev/null || true
 
       # Upload artifacts
       - name: Upload artifact
