@@ -1,3 +1,4 @@
+
 name: build
 
 on:
@@ -29,11 +30,11 @@ jobs:
             os: ubuntu-24.04
           - name: macos-arm64
             os: macos-15
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history is not needed; the build ID falls back to the commit sha.
           fetch-depth: 1
 
       - name: Compute version string
@@ -46,24 +47,36 @@ jobs:
           fi
           echo "CITRA_VERSION=$V" >> "$GITHUB_ENV"
 
-      # ------------------------------------------------------------------ #
-      # Linux: system Qt 6, everything else is vendored in externals/
-      # ------------------------------------------------------------------ #
+      # Dependency caches
+      - name: Cache Qt 6.6.0 (Windows/macOS)
+        if: ${{ runner.os == 'Windows' || runner.os == 'macOS' }}
+        uses: actions/cache@v4
+        with:
+          path: build/externals/qt
+          key: citra-qt-${{ matrix.name }}-6.6.0-${{ hashFiles('CMakeModules/aqt_config.ini') }}
+
+      - name: Cache linuxdeploy and plugins (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: build/externals/linuxdeploy
+          key: citra-linuxdeploy-ubuntu-24.04-x86_64-v1
+
+      # Linux dependencies
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             ninja-build \
+            patchelf file desktop-file-utils \
             qt6-base-dev qt6-multimedia-dev \
             libgl-dev libegl-dev \
             libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
             libx11-dev libxext-dev libxrandr-dev libxi-dev libxrender-dev \
             libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev
 
-      # ------------------------------------------------------------------ #
       # Configure
-      # ------------------------------------------------------------------ #
       - name: Configure (Linux)
         if: runner.os == 'Linux'
         run: >-
@@ -99,9 +112,7 @@ jobs:
           -DENABLE_OPENGL=ON
           -DENABLE_VULKAN=OFF
 
-      # ------------------------------------------------------------------ #
       # Build
-      # ------------------------------------------------------------------ #
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: cmake --build build --parallel --target citra-qt citra citra-room
@@ -114,17 +125,13 @@ jobs:
         if: runner.os == 'macOS'
         run: cmake --build build --parallel --target citra-qt
 
-      # ------------------------------------------------------------------ #
       # Package
-      # ------------------------------------------------------------------ #
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $pkg = "pkg-out/citra"
           New-Item -ItemType Directory -Force -Path $pkg | Out-Null
-          # windeployqt ran as a POST_BUILD step of citra-qt: bin/Release
-          # already contains the Qt DLLs, plugins and qt.conf.
           robocopy build/bin/Release $pkg /E /XF *.pdb *.ilk *.exp *.lib | Out-Null
           if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
           Copy-Item README.md, license.txt $pkg
@@ -146,15 +153,14 @@ jobs:
           set -e
           app="build/bin/Release/citra-qt.app"
           macdeployqt="$(find build/externals/qt -name 'macdeployqt*' -path '*bin*' | head -1)"
+          test -n "$macdeployqt" || { echo "macdeployqt not found in cached/downloaded Qt"; exit 1; }
           echo "Using macdeployqt at: $macdeployqt"
           "$macdeployqt" "$app" -always-overwrite -sign="-"
           mkdir -p pkg-out
           ditto -c -k --keepParent "$app" "pkg-out/citra-macos-arm64-$CITRA_VERSION.zip"
           ls -lh pkg-out/
 
-      # ------------------------------------------------------------------ #
-      # Upload build artifacts (every push / PR)
-      # ------------------------------------------------------------------ #
+      # Upload artifacts
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -162,11 +168,9 @@ jobs:
           path: pkg-out/*
           if-no-files-found: error
           compression-level: 0
+          retention-days: 90
 
-  # ---------------------------------------------------------------------- #
-  # Release: attach every platform artifact to a GitHub release whenever
-  # a tag starting with "v" is pushed (e.g. git tag v1.0.0 && git push --tags)
-  # ---------------------------------------------------------------------- #
+  # Release
   release:
     name: Create release
     if: github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
