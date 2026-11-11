@@ -368,6 +368,11 @@
              <string>Hybrid Screen</string>
             </property>
            </item>
+           <item>
+            <property name="text">
+             <string>Fusion Screen</string>
+            </property>
+           </item>
           </widget>
          </item>
         </layout>

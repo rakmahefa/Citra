@@ -11,6 +11,55 @@
 #include "video_core/renderer_opengl/post_processing_opengl.h"
 #endif
 
+namespace {
+
+// The layout combobox does not list every LayoutOption (mobile-only layouts are excluded),
+// and the exposed enum values are not contiguous anymore now that FusionScreen was appended
+// to the end of LayoutOption to keep existing configuration values stable. Map between
+// combobox indices and LayoutOption values explicitly instead of relying on the enum value
+// matching the item order.
+int LayoutToComboboxIndex(Settings::LayoutOption option) {
+    switch (option) {
+    case Settings::LayoutOption::SingleScreen:
+        return 1;
+    case Settings::LayoutOption::LargeScreen:
+        return 2;
+    case Settings::LayoutOption::SideScreen:
+        return 3;
+    case Settings::LayoutOption::SeparateWindows:
+        return 4;
+    case Settings::LayoutOption::HybridScreen:
+        return 5;
+    case Settings::LayoutOption::FusionScreen:
+        return 6;
+    case Settings::LayoutOption::Default:
+    default:
+        return 0;
+    }
+}
+
+Settings::LayoutOption ComboboxIndexToLayout(int index) {
+    switch (index) {
+    case 1:
+        return Settings::LayoutOption::SingleScreen;
+    case 2:
+        return Settings::LayoutOption::LargeScreen;
+    case 3:
+        return Settings::LayoutOption::SideScreen;
+    case 4:
+        return Settings::LayoutOption::SeparateWindows;
+    case 5:
+        return Settings::LayoutOption::HybridScreen;
+    case 6:
+        return Settings::LayoutOption::FusionScreen;
+    case 0:
+    default:
+        return Settings::LayoutOption::Default;
+    }
+}
+
+} // namespace
+
 ConfigureEnhancements::ConfigureEnhancements(QWidget* parent)
     : QWidget(parent), ui(std::make_unique<Ui::ConfigureEnhancements>()) {
     ui->setupUi(this);
@@ -62,13 +111,16 @@ void ConfigureEnhancements::SetConfiguration() {
                                                &Settings::values.texture_filter);
         ConfigurationShared::SetHighlight(ui->widget_texture_filter,
                                           !Settings::values.texture_filter.UsingGlobal());
-        ConfigurationShared::SetPerGameSetting(ui->layout_combobox,
-                                               &Settings::values.layout_option);
+        ui->layout_combobox->setCurrentIndex(
+            Settings::values.layout_option.UsingGlobal()
+                ? ConfigurationShared::USE_GLOBAL_INDEX
+                : LayoutToComboboxIndex(Settings::values.layout_option.GetValue()) +
+                      ConfigurationShared::USE_GLOBAL_OFFSET);
     } else {
         ui->resolution_factor_combobox->setCurrentIndex(
             Settings::values.resolution_factor.GetValue());
         ui->layout_combobox->setCurrentIndex(
-            static_cast<int>(Settings::values.layout_option.GetValue()));
+            LayoutToComboboxIndex(Settings::values.layout_option.GetValue()));
         ui->texture_filter_combobox->setCurrentIndex(
             static_cast<int>(Settings::values.texture_filter.GetValue()));
     }
@@ -154,7 +206,11 @@ void ConfigureEnhancements::ApplyConfiguration() {
                                              ui->toggle_linear_filter, linear_filter);
     ConfigurationShared::ApplyPerGameSetting(&Settings::values.texture_filter,
                                              ui->texture_filter_combobox);
-    ConfigurationShared::ApplyPerGameSetting(&Settings::values.layout_option, ui->layout_combobox);
+    ConfigurationShared::ApplyPerGameSetting(&Settings::values.layout_option, ui->layout_combobox,
+                                             [](s32 index) {
+                                                 return static_cast<int>(
+                                                     ComboboxIndexToLayout(index));
+                                             });
     ConfigurationShared::ApplyPerGameSetting(&Settings::values.swap_screen, ui->toggle_swap_screen,
                                              swap_screen);
     ConfigurationShared::ApplyPerGameSetting(&Settings::values.upright_screen,
@@ -219,5 +275,5 @@ void ConfigureEnhancements::SetupPerGameUI() {
 
     ConfigurationShared::SetColoredComboBox(
         ui->layout_combobox, ui->widget_layout,
-        static_cast<int>(Settings::values.layout_option.GetValue(true)));
+        LayoutToComboboxIndex(Settings::values.layout_option.GetValue(true)));
 }

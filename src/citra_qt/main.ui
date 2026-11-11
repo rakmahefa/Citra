@@ -137,6 +137,7 @@
      <addaction name="action_Screen_Layout_Hybrid_Screen"/>
      <addaction name="action_Screen_Layout_Side_by_Side"/>
      <addaction name="action_Screen_Layout_Separate_Windows"/>
+     <addaction name="action_Screen_Layout_Fusion_Screen"/>
      <addaction name="separator"/>
      <addaction name="action_Screen_Layout_Upright_Screens"/>
      <addaction name="action_Screen_Layout_Swap_Screens"/>
@@ -527,6 +528,14 @@
    </property>
    <property name="text">
     <string>Separate Windows</string>
+   </property>
+  </action>
+  <action name="action_Screen_Layout_Fusion_Screen">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Fusion Screen</string>
    </property>
   </action>
   <action name="action_Screen_Layout_Swap_Screens">
