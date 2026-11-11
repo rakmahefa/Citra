@@ -1,0 +1,7 @@
+# Top-level build directories
+/build*/
+# IDE
+/.vscode/
+/.idea/
+# Python
+__pycache__/

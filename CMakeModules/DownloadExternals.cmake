@@ -45,7 +45,13 @@ function(determine_qt_parameters target host_out type_out arch_out arch_path_out
     elseif (APPLE)
         set(host "mac")
         set(type "desktop")
-        set(arch "clang_64")
+        # Pick the Qt binaries matching the target architecture: Apple Silicon
+        # builds need the clang_arm64 Qt package instead of the Intel one.
+        if ("arm64" IN_LIST ARCHITECTURE)
+            set(arch "clang_arm64")
+        else()
+            set(arch "clang_64")
+        endif()
         set(arch_path "macos")
 
         if (IOS AND NOT tool)

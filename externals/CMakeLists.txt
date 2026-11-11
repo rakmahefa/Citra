@@ -392,6 +392,10 @@ if (ENABLE_VULKAN)
         set(ENABLE_CTEST OFF CACHE BOOL "")
         set(ENABLE_HLSL OFF CACHE BOOL "")
         set(BUILD_EXTERNAL OFF CACHE BOOL "")
+        # Citra only uses the glslang/SPIRV libraries, never the SPIR-V
+        # optimizer, and no SPIRV-Tools copy is vendored. Newer glslang
+        # versions default ENABLE_OPT to ON and fail without SPIRV-Tools.
+        set(ENABLE_OPT OFF CACHE BOOL "")
         add_subdirectory(glslang)
     endif()
 

@@ -136,6 +136,9 @@ endif()
 # Sanity check : Check that all submodules are present
 # =======================================================================
 
+# All external dependencies are vendored directly in the repository
+# (externals/ contains plain sources instead of git submodules), so the
+# .gitmodules-based check only runs when a .gitmodules file actually exists.
 function(check_submodules_present)
     file(READ "${PROJECT_SOURCE_DIR}/.gitmodules" gitmodules)
     string(REGEX MATCHALL "path *= *[^ \t\r\n]*" gitmodules ${gitmodules})
@@ -147,7 +150,7 @@ function(check_submodules_present)
         endif()
     endforeach()
 endfunction()
-if (EXISTS "${PROJECT_SOURCE_DIR}/.git/objects")
+if (EXISTS "${PROJECT_SOURCE_DIR}/.git/objects" AND EXISTS "${PROJECT_SOURCE_DIR}/.gitmodules")
     # only check submodules when source is obtained via Git
     check_submodules_present()
 endif()
