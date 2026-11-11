@@ -130,7 +130,14 @@ struct DspLle::Impl final {
         StopTeakraThread();
     }
 
-    Teakra::Teakra teakra;
+    // The DSP memory is owned by the emulator instead of Teakra itself, and
+    // is handed to Teakra through UserConfig, as required by the current
+    // Teakra API. This also keeps the std::array-based public interface.
+    std::array<u8, Memory::DSP_RAM_SIZE> dsp_memory{};
+
+    Teakra::Teakra teakra{Teakra::UserConfig{
+        .dsp_memory = dsp_memory.data(),
+    }};
     u16 pipe_base_waddr = 0;
 
     bool semaphore_signaled = false;
@@ -189,13 +196,11 @@ struct DspLle::Impl final {
     }
 
     u8* GetDspDataPointer(u32 baddr) {
-        auto& memory = teakra.GetDspMemory();
-        return &memory[DspDataOffset + baddr];
+        return dsp_memory.data() + DspDataOffset + baddr;
     }
 
     const u8* GetDspDataPointer(u32 baddr) const {
-        auto& memory = teakra.GetDspMemory();
-        return &memory[DspDataOffset + baddr];
+        return dsp_memory.data() + DspDataOffset + baddr;
     }
 
     PipeStatus GetPipeStatus(u8 pipe_index, PipeDirection direction) const {
@@ -312,7 +317,7 @@ struct DspLle::Impl final {
         teakra.Reset();
 
         Dsp1 dsp(buffer);
-        auto& dsp_memory = teakra.GetDspMemory();
+        auto& dsp_memory = this->dsp_memory;
         u8* program = dsp_memory.data();
         u8* data = dsp_memory.data() + DspDataOffset;
         for (const auto& segment : dsp.segments) {
@@ -404,7 +409,7 @@ void DspLle::PipeWrite(DspPipe pipe_number, std::span<const u8> buffer) {
 }
 
 std::array<u8, Memory::DSP_RAM_SIZE>& DspLle::GetDspMemory() {
-    return impl->teakra.GetDspMemory();
+    return impl->dsp_memory;
 }
 
 void DspLle::SetInterruptHandler(

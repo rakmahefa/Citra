@@ -714,7 +714,11 @@ void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_p
         screenshot_image.bits(),
         [this, screenshot_path](bool invert_y) {
             const std::string std_screenshot_path = screenshot_path.toStdString();
-            if ((invert_y ? screenshot_image.flipped(Qt::Vertical) : screenshot_image).save(screenshot_path)) {
+            // mirrored() (available since Qt 4, deprecated in Qt 6.9) is used
+            // instead of flipped() (Qt 6.9+) so this also builds against the
+            // bundled Qt 6.6.0 and Ubuntu 24.04's system Qt 6.4.
+            if ((invert_y ? screenshot_image.mirrored(false, true) : screenshot_image)
+                    .save(screenshot_path)) {
                 LOG_INFO(Frontend, "Screenshot saved to \"{}\"", std_screenshot_path);
             } else {
                 LOG_ERROR(Frontend, "Failed to save screenshot to \"{}\"", std_screenshot_path);

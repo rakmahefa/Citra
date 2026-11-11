@@ -86,7 +86,9 @@ void ConfigureCamera::ConnectEvents() {
     });
     connect(ui->toolButton, &QToolButton::clicked, this, &ConfigureCamera::OnToolButtonClicked);
     connect(ui->preview_button, &QPushButton::clicked, this, [this] { StartPreviewing(); });
-    connect(ui->prompt_before_load, &QCheckBox::checkStateChanged, this, [this](Qt::CheckState state) {
+    // stateChanged is used instead of the Qt 6.7+ checkStateChanged so that the
+    // code also builds against Qt 6.2-6.6 (e.g. Ubuntu 24.04, the bundled 6.6.0).
+    connect(ui->prompt_before_load, &QCheckBox::stateChanged, this, [this](int state) {
         ui->camera_file->setDisabled(state == Qt::Checked);
         ui->toolButton->setDisabled(state == Qt::Checked);
         if (state == Qt::Checked) {

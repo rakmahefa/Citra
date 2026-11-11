@@ -213,9 +213,12 @@ std::vector<u16> ProcessImage(const QImage& image, int width, int height, bool o
     }
     QImage scaled =
         image.scaled(width, height, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    // mirrored() (available since Qt 4, deprecated in Qt 6.9) is used instead
+    // of flipped() (Qt 6.9+) so this also builds against the bundled Qt 6.6.0
+    // and Ubuntu 24.04's system Qt 6.4.
     QImage transformed =
         scaled.copy((scaled.width() - width) / 2, (scaled.height() - height) / 2, width, height)
-            .flipped((flip_horizontal ? Qt::Horizontal : Qt::Orientation{}) | (flip_vertical ? Qt::Vertical : Qt::Orientation{}));
+            .mirrored(flip_horizontal, flip_vertical);
     if (output_rgb) {
         QImage converted = transformed.convertToFormat(QImage::Format_RGB16);
         std::memcpy(buffer.data(), converted.bits(), width * height * sizeof(u16));
