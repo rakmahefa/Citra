@@ -1,0 +1,214 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+          - name: linux-x64
+            os: ubuntu-24.04
+          - name: macos-arm64
+            os: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history is not needed; the build ID falls back to the commit sha.
+          fetch-depth: 1
+
+      - name: Compute version string
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            V="$GITHUB_REF_NAME"
+          else
+            V="$(echo "$GITHUB_REF_NAME" | tr '/' '-')-${GITHUB_SHA::8}"
+          fi
+          echo "CITRA_VERSION=$V" >> "$GITHUB_ENV"
+
+      # ------------------------------------------------------------------ #
+      # Linux: system Qt 6, everything else is vendored in externals/
+      # ------------------------------------------------------------------ #
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            qt6-base-dev qt6-multimedia-dev \
+            libgl-dev libegl-dev \
+            libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
+            libx11-dev libxext-dev libxrandr-dev libxi-dev libxrender-dev \
+            libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev
+
+      # ------------------------------------------------------------------ #
+      # Configure
+      # ------------------------------------------------------------------ #
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DENABLE_TESTS=OFF
+          -DCITRA_WARNINGS_AS_ERRORS=OFF
+          -DENABLE_LTO=OFF
+
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DENABLE_TESTS=OFF
+          -DCITRA_WARNINGS_AS_ERRORS=OFF
+          -DENABLE_LTO=OFF
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DENABLE_TESTS=OFF
+          -DCITRA_WARNINGS_AS_ERRORS=OFF
+          -DENABLE_LTO=OFF
+          -DENABLE_OPENGL=ON
+          -DENABLE_VULKAN=OFF
+
+      # ------------------------------------------------------------------ #
+      # Build
+      # ------------------------------------------------------------------ #
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --parallel --target citra-qt citra citra-room
+
+      - name: Build and bundle AppImages (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build build --parallel --target bundle
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: cmake --build build --parallel --target citra-qt
+
+      # ------------------------------------------------------------------ #
+      # Package
+      # ------------------------------------------------------------------ #
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $pkg = "pkg-out/citra"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          # windeployqt ran as a POST_BUILD step of citra-qt: bin/Release
+          # already contains the Qt DLLs, plugins and qt.conf.
+          robocopy build/bin/Release $pkg /E /XF *.pdb *.ilk *.exp *.lib | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
+          Copy-Item README.md, license.txt $pkg
+          New-Item -ItemType Directory -Force -Path pkg-out | Out-Null
+          Compress-Archive -Path "$pkg/*" `
+            -DestinationPath "pkg-out/citra-windows-x64-$env:CITRA_VERSION.zip" -Force
+          Get-ChildItem pkg-out
+
+      - name: Package AppImages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p pkg-out
+          cp build/bundle/*.AppImage pkg-out/
+          ls -lh pkg-out/
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          app="build/bin/Release/citra-qt.app"
+          macdeployqt="$(find build/externals/qt -name 'macdeployqt*' -path '*bin*' | head -1)"
+          echo "Using macdeployqt at: $macdeployqt"
+          "$macdeployqt" "$app" -always-overwrite -sign="-"
+          mkdir -p pkg-out
+          ditto -c -k --keepParent "$app" "pkg-out/citra-macos-arm64-$CITRA_VERSION.zip"
+          ls -lh pkg-out/
+
+      # ------------------------------------------------------------------ #
+      # Upload build artifacts (every push / PR)
+      # ------------------------------------------------------------------ #
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: citra-${{ matrix.name }}
+          path: pkg-out/*
+          if-no-files-found: error
+          compression-level: 0
+
+  # ---------------------------------------------------------------------- #
+  # Release: attach every platform artifact to a GitHub release whenever
+  # a tag starting with "v" is pushed (e.g. git tag v1.0.0 && git push --tags)
+  # ---------------------------------------------------------------------- #
+  release:
+    name: Create release
+    if: github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release files
+        run: ls -lh dist/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Automated release build of the **screen layout fusion** branch.
+
+            **Highlights**
+
+            - New **Fusion** screen layout: the primary screen is stretched to a
+              full 16:9 view and the secondary screen is overlaid on top of it as
+              a minimap in the top-right corner. Select it via
+              *View → Screen Layout → Fusion*, the layout hotkey, or
+              *Emulation → Configure → Enhancements*.
+            - Builds for **Windows (x64)**, **Linux (x64 AppImage)** and
+              **macOS (Apple Silicon)**, including the `citra` SDL frontend and
+              `citra-room` on Windows, and portable AppImages on Linux.
+
+            **Notes**
+
+            - On Windows, video dumping requires FFmpeg DLLs (FFmpeg 5 or newer,
+              e.g. from https://www.gyan.dev/ffmpeg/builds/) placed next to
+              `citra-qt.exe`; the emulator itself runs without them.
+            - The Linux AppImage was built on Ubuntu 24.04 with a static SDL2.
+            - macOS uses the OpenGL renderer (Vulkan/MoltenVK is not enabled in
+              this build).
