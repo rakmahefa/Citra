@@ -339,6 +339,7 @@
     <string name="emulation_screen_layout_single">Single Screen</string>
     <string name="emulation_screen_layout_sidebyside">Side by Side Screens</string>
     <string name="emulation_screen_layout_hybrid">Hybrid Screens</string>
+    <string name="emulation_screen_layout_fusion">Fusion Screen (Minimap)</string>
     <string name="emulation_cycle_landscape_layouts">Cycle Landscape Layouts</string>
     <string name="emulation_swap_screens">Swap Screens</string>
     <string name="emulation_touch_overlay_reset">Reset Overlay</string>

@@ -688,6 +688,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback, Choreographer.Fram
             ScreenLayout.HYBRID_SCREEN.int ->
                 R.id.menu_screen_layout_hybrid
 
+            ScreenLayout.FUSION_SCREEN.int ->
+                R.id.menu_screen_layout_fusion
+
             else -> R.id.menu_screen_layout_landscape
         }
         popupMenu.menu.findItem(layoutOptionMenuItem).setChecked(true)
@@ -716,6 +719,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback, Choreographer.Fram
 
                 R.id.menu_screen_layout_hybrid -> {
                     screenAdjustmentUtil.changeScreenOrientation(ScreenLayout.HYBRID_SCREEN)
+                    true
+                }
+
+                R.id.menu_screen_layout_fusion -> {
+                    screenAdjustmentUtil.changeScreenOrientation(ScreenLayout.FUSION_SCREEN)
                     true
                 }
 

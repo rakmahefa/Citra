@@ -12,7 +12,8 @@ enum class ScreenLayout(val int: Int) {
     SIDE_SCREEN(3),
     HYBRID_SCREEN(4),
     MOBILE_PORTRAIT(5),
-    MOBILE_LANDSCAPE(6);
+    MOBILE_LANDSCAPE(6),
+    FUSION_SCREEN(7);
 
     companion object {
         fun from(int: Int): ScreenLayout {
