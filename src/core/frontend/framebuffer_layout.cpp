@@ -364,6 +364,60 @@ FramebufferLayout HybridScreenLayout(u32 width, u32 height, bool swapped, bool u
     return res;
 }
 
+FramebufferLayout FusionFrameLayout(u32 width, u32 height, bool swapped, bool upright) {
+    ASSERT(width > 0);
+    ASSERT(height > 0);
+
+    FramebufferLayout res{width, height, true, true, {}, {}, !upright};
+
+    // The primary screen fills the largest centered 16:9 rectangle that fits in the window.
+    // On a 16:9 framebuffer (e.g. most monitors in fullscreen) it covers the whole window.
+    Common::Rectangle<u32> primary =
+        MaxRectangle(Common::Rectangle<u32>{0, 0, width, height}, 9.f / 16.f);
+    primary = primary.TranslateX((width - primary.GetWidth()) / 2)
+                  .TranslateY((height - primary.GetHeight()) / 2);
+
+    // The secondary screen is overlaid on top of the primary screen as a minimap, pinned to
+    // the top-right corner of the primary screen. Its aspect ratio matches the native
+    // (possibly rotated) secondary screen so its content is never cropped or stretched.
+    const float minimap_aspect_ratio = swapped
+                                           ? (upright ? TOP_SCREEN_UPRIGHT_ASPECT_RATIO
+                                                      : TOP_SCREEN_ASPECT_RATIO)
+                                           : (upright ? BOT_SCREEN_UPRIGHT_ASPECT_RATIO
+                                                      : BOT_SCREEN_ASPECT_RATIO);
+
+    // Minimap-like size: a quarter of the primary screen height, kept inside the primary
+    // screen even on very small windows, with a small margin to the screen edges.
+    u32 minimap_height = std::max(1u, primary.GetHeight() / 4);
+    u32 minimap_width = std::max(
+        1u, static_cast<u32>(
+                std::round(static_cast<float>(minimap_height) / minimap_aspect_ratio)));
+    minimap_height = std::min(minimap_height, std::max(1u, primary.GetHeight() / 2));
+    minimap_width = std::min(minimap_width, std::max(1u, primary.GetWidth() / 2));
+    const u32 margin = std::max(1u, primary.GetHeight() / 50);
+
+    // Pin the minimap to the top-right corner of the primary screen, falling back to the
+    // primary screen origin on degenerate window sizes where the margin would not fit.
+    const u32 minimap_left = (minimap_width + margin <= primary.GetWidth())
+                                 ? primary.right - margin - minimap_width
+                                 : primary.left;
+    const u32 minimap_top =
+        (margin < primary.GetHeight()) ? primary.top + margin : primary.top;
+    const Common::Rectangle<u32> minimap{minimap_left, minimap_top, minimap_left + minimap_width,
+                                         minimap_top + minimap_height};
+
+    if (!swapped) {
+        // The top screen fills the view and the bottom screen is the minimap overlay.
+        res.top_screen = primary;
+        res.bottom_screen = minimap;
+    } else {
+        // The bottom screen fills the view and the top screen is the minimap overlay.
+        res.bottom_screen = primary;
+        res.top_screen = minimap;
+    }
+    return res;
+}
+
 FramebufferLayout SeparateWindowsLayout(u32 width, u32 height, bool is_secondary, bool upright) {
     // When is_secondary is true, we disable the top screen, and enable the bottom screen.
     // The same logic is found in the SingleFrameLayout using the is_swapped bool.
@@ -480,6 +534,17 @@ FramebufferLayout FrameLayoutFromResolutionScale(u32 res_scale, bool is_secondar
         }
         return LargeFrameLayout(width, height, Settings::values.swap_screen.GetValue(), false,
                                 large_screen_proportion, VerticalAlignment::Top);
+    }
+
+    case Settings::LayoutOption::FusionScreen: {
+        // The primary screen fills a full 16:9 frame at the native screen height
+        height = Core::kScreenTopHeight * res_scale;
+        width = height * 16 / 9;
+        if (Settings::values.upright_screen.GetValue()) {
+            std::swap(width, height);
+        }
+        return FusionFrameLayout(width, height, Settings::values.swap_screen.GetValue(),
+                                 Settings::values.upright_screen.GetValue());
     }
 
     case Settings::LayoutOption::Default:
@@ -605,6 +670,11 @@ std::pair<unsigned, unsigned> GetMinimumSizeFromLayout(Settings::LayoutOption la
     case Settings::LayoutOption::SideScreen:
         min_width = Core::kScreenTopWidth + Core::kScreenBottomWidth;
         min_height = Core::kScreenBottomHeight;
+        break;
+    case Settings::LayoutOption::FusionScreen:
+        // The primary screen is a full 16:9 view at the native screen height
+        min_width = (Core::kScreenTopHeight * 16) / 9;
+        min_height = Core::kScreenTopHeight;
         break;
     case Settings::LayoutOption::Default:
     default:

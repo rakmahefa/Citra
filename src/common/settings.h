@@ -49,6 +49,11 @@ enum class LayoutOption : u32 {
     // Similiar to LargeScreen, but better for mobile devices in landscape mode. The screens are
     // clamped to the top of the frame, and the bottom screen is a bit bigger.
     MobileLandscape,
+
+    // The primary screen fills a full 16:9 view, and the secondary screen is overlaid on top
+    // of it as a minimap in the top-right corner. With swap_screen, the bottom screen becomes
+    // the fullscreen view and the top screen becomes the minimap.
+    FusionScreen,
 };
 
 enum class StereoRenderOption : u32 {

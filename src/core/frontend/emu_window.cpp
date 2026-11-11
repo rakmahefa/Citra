@@ -228,6 +228,11 @@ void EmuWindow::UpdateCurrentFramebufferLayout(u32 width, u32 height, bool is_po
                 Layout::LargeFrameLayout(width, height, Settings::values.swap_screen.GetValue(),
                                          false, 2.25f, Layout::VerticalAlignment::Top);
             break;
+        case Settings::LayoutOption::FusionScreen:
+            layout =
+                Layout::FusionFrameLayout(width, height, Settings::values.swap_screen.GetValue(),
+                                          Settings::values.upright_screen.GetValue());
+            break;
         case Settings::LayoutOption::Default:
         default:
             layout =

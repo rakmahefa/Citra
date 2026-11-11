@@ -130,6 +130,19 @@ FramebufferLayout LargeFrameLayout(u32 width, u32 height, bool is_swapped, bool 
 FramebufferLayout HybridScreenLayout(u32 width, u32 height, bool swapped, bool upright);
 
 /**
+ * Factory method for constructing a frame with the primary screen stretched to fill a
+ * full 16:9 view, and the secondary screen overlaid on top of it as a minimap in the
+ * top-right corner (like a minimap in modern games). The two screens overlap.
+ * @param width Window framebuffer width in pixels
+ * @param height Window framebuffer height in pixels
+ * @param swapped if true, the bottom screen will be the fullscreen display and the top
+ * screen will be the minimap
+ * @param upright if true, the screens will be rotated 90 degrees anti-clockwise
+ * @return Newly created FramebufferLayout object with default screen regions initialized
+ */
+FramebufferLayout FusionFrameLayout(u32 width, u32 height, bool swapped, bool upright);
+
+/**
  * Factory method for constructing a Frame with the Top screen and bottom
  * screen on separate windows
  * @param width Window framebuffer width in pixels
