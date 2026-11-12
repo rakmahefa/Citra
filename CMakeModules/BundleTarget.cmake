@@ -110,8 +110,14 @@ if (BUNDLE_TARGET_EXECUTE)
         set(appdir_path "${binary_path}/AppDir-${executable_name}")
 
         if (enable_qt)
-            # Find qmake to make sure the plugin uses the right version of Qt.
+            # Find qmake to make sure the plugin uses the same Qt installation
+            # as the application being bundled.
             find_program(qmake_executable qmake6 PATHS "${QT_HOST_PATH}/bin")
+            if (NOT qmake_executable)
+                message(FATAL_ERROR
+                    "Qt AppImage bundling was requested, but qmake6 was not found in "
+                    "${QT_HOST_PATH}/bin. Install the Qt 6 development tools or set QT_HOST_PATH.")
+            endif()
 
             set(extra_linuxdeploy_env "QMAKE=${qmake_executable}")
             set(extra_linuxdeploy_args --plugin qt)
@@ -132,20 +138,44 @@ if (BUNDLE_TARGET_EXECUTE)
             message(FATAL_ERROR "linuxdeploy failed to create AppDir: ${linuxdeploy_appdir_result}")
         endif()
 
+        # appimagetool expects the icon named by the desktop entry (Icon=citra)
+        # to also be available at the AppDir root. linuxdeploy may only deploy
+        # the SVG into usr/share/icons, which is not sufficient for .DirIcon.
+        if (NOT EXISTS "${source_path}/dist/icon.png")
+            message(FATAL_ERROR "AppImage icon not found: ${source_path}/dist/icon.png")
+        endif()
+        configure_file(
+            "${source_path}/dist/icon.png"
+            "${appdir_path}/citra.png"
+            COPYONLY)
+
         if (enable_qt)
             set(qt_hook_file "${appdir_path}/apprun-hooks/linuxdeploy-plugin-qt-hook.sh")
-            file(READ "${qt_hook_file}" qt_hook_contents)
-            # Add Cinnamon to list of DEs for GTK3 theming.
-            string(REPLACE
-                "*XFCE*"
-                "*X-Cinnamon*|*XFCE*"
-                qt_hook_contents "${qt_hook_contents}")
-            # Wayland backend crashes due to changed schemas in Gnome 40.
-            string(REPLACE
-                "export QT_QPA_PLATFORMTHEME=gtk3"
-                "export QT_QPA_PLATFORMTHEME=gtk3; export GDK_BACKEND=x11"
-                qt_hook_contents "${qt_hook_contents}")
-            file(WRITE "${qt_hook_file}" "${qt_hook_contents}")
+            if (EXISTS "${qt_hook_file}")
+                # Older Qt plugin versions create this hook. Keep the project's
+                # Cinnamon and X11 compatibility adjustments when it is present.
+                file(READ "${qt_hook_file}" qt_hook_contents)
+
+                # Add Cinnamon to list of DEs for GTK3 theming.
+                string(REPLACE
+                    "*XFCE*"
+                    "*X-Cinnamon*|*XFCE*"
+                    qt_hook_contents "${qt_hook_contents}")
+
+                # Wayland backend crashes due to changed schemas in Gnome 40.
+                string(REPLACE
+                    "export QT_QPA_PLATFORMTHEME=gtk3"
+                    "export QT_QPA_PLATFORMTHEME=gtk3; export GDK_BACKEND=x11"
+                    qt_hook_contents "${qt_hook_contents}")
+                file(WRITE "${qt_hook_file}" "${qt_hook_contents}")
+            else()
+                # Current Qt 6 plugin versions may intentionally skip creation
+                # of this legacy hook. Its absence is expected; do not create a
+                # dummy hook here, because that would force linuxdeploy to wrap
+                # AppRun on Qt distributions that do not require that wrapper.
+                message(STATUS
+                    "Qt plugin did not provide its legacy AppRun hook; skipping hook-specific compatibility edits.")
+            endif()
         endif()
 
         message(STATUS "Creating AppImage for executable ${executable_path}")
