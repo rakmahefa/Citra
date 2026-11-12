@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 permissions:
@@ -18,7 +18,7 @@ jobs:
   build:
     name: build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +28,7 @@ jobs:
           - name: linux-x64
             os: ubuntu-24.04
           - name: macos-arm64
+            # GitHub's macos-15 hosted runner is Apple Silicon (arm64).
             os: macos-15
 
     steps:
@@ -35,180 +36,354 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
 
       - name: Compute version string
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            V="$GITHUB_REF_NAME"
+            version="$GITHUB_REF_NAME"
           else
-            V="$(echo "$GITHUB_REF_NAME" | tr '/' '-')-${GITHUB_SHA::8}"
+            version="$(echo "$GITHUB_REF_NAME" | tr '/' '-')-${GITHUB_SHA::8}"
           fi
-          echo "CITRA_VERSION=$V" >> "$GITHUB_ENV"
+          echo "CITRA_VERSION=$version" >> "$GITHUB_ENV"
 
-      # Dependency caches
+      - name: Show runner and tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          cmake --version
+          ninja --version
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            test "$(uname -m)" = "arm64"
+            xcodebuild -version
+          fi
+
+      # ------------------------------------------------------------------
+      # Qt 6.6.0: cache the exact CMake prefix and install it explicitly.
+      # Pre-populating this directory makes DownloadExternals.cmake skip its
+      # implicit aqt download during CMake configure.
+      # ------------------------------------------------------------------
       - name: Cache Qt 6.6.0 (Windows/macOS)
+        id: qt-cache
         if: ${{ runner.os == 'Windows' || runner.os == 'macOS' }}
         uses: actions/cache@v4
         with:
           path: build/externals/qt
-          key: citra-qt-${{ matrix.name }}-6.6.0-${{ hashFiles('CMakeModules/aqt_config.ini') }}
+          key: citra-qt-${{ matrix.name }}-6.6.0-v1
 
-      - name: Cache linuxdeploy and plugins (Linux)
-        if: runner.os == 'Linux'
-        uses: actions/cache@v4
+      - name: Set up Python for aqt
+        if: ${{ runner.os == 'Windows' || runner.os == 'macOS' }}
+        uses: actions/setup-python@v5
         with:
-          path: build/externals/linuxdeploy
-          key: citra-linuxdeploy-ubuntu-24.04-x86_64-v1
+          python-version: "3.12"
 
-      # Linux : miroir apt rapide + timeouts courts pour éviter les blocages
-      - name: Configure apt mirrors (Linux)
-        if: runner.os == 'Linux'
+      - name: Install Qt 6.6.0 (Windows x64)
+        if: runner.os == 'Windows'
+        timeout-minutes: 45
+        shell: bash
         run: |
-          # Remplace la liste de miroirs (azure.archive.ubuntu.com est souvent lent/en timeout)
-          printf '%s\tpriority:1\n' 'http://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
-          printf '%s\tpriority:2\n' 'http://mirrors.edge.kernel.org/ubuntu/' | sudo tee -a /etc/apt/apt-mirrors.txt
-          printf '%s\tpriority:3\n' 'http://azure.archive.ubuntu.com/ubuntu/' | sudo tee -a /etc/apt/apt-mirrors.txt
-          # Retries + timeouts courts : apt abandonne vite un miroir lent
-          sudo tee /etc/apt/apt.conf.d/80-ci-tuning >/dev/null <<'EOF'
-          Acquire::Retries "5";
-          Acquire::http::Timeout "15";
-          Acquire::https::Timeout "15";
-          Acquire::Queue-Mode "host";
-          APT::Install-Recommends "false";
-          EOF
-          # Pas besoin de man-db / docs : accélère l'installation
-          sudo tee /etc/dpkg/dpkg.cfg.d/01-nodoc >/dev/null <<'EOF'
-          path-exclude /usr/share/doc/*
-          path-exclude /usr/share/man/*
-          path-exclude /usr/share/info/*
+          set -euo pipefail
+          prefix="build/externals/qt/6.6.0/msvc2019_64"
+          ensure_qt_tool_aliases() {
+            # Qt's official Windows tool names are usually unsuffixed; this
+            # project's BundleTarget.cmake searches for the Qt 6-suffixed names.
+            [[ -f "$prefix/bin/windeployqt6.exe" ]] || cp "$prefix/bin/windeployqt.exe" "$prefix/bin/windeployqt6.exe"
+            [[ -f "$prefix/bin/qtpaths6.exe" ]] || cp "$prefix/bin/qtpaths.exe" "$prefix/bin/qtpaths6.exe"
+          }
+
+          if [[ -f "$prefix/bin/qmake.exe" && ( -f "$prefix/bin/windeployqt6.exe" || -f "$prefix/bin/windeployqt.exe" ) && ( -f "$prefix/bin/qtpaths6.exe" || -f "$prefix/bin/qtpaths.exe" ) ]]; then
+            ensure_qt_tool_aliases
+            echo "Qt 6.6.0 is already present; reusing it."
+            exit 0
+          fi
+          rm -rf "$prefix"
+
+          python -m pip install --disable-pip-version-check --retries 5 --timeout 60 "aqtinstall==3.1.9"
+          aqt_config="$(mktemp)"
+          trap 'rm -f "$aqt_config"' EXIT
+          cp CMakeModules/aqt_config.ini "$aqt_config"
+          cat >> "$aqt_config" <<'EOF'
+          [requests]
+          connection_timeout: 120
+          response_timeout: 300
+          max_retries_on_connection_error: 5
+          retry_backoff: 5
           EOF
 
-      # Linux dependencies
+          for attempt in 1 2 3; do
+            echo "Qt installation attempt $attempt/3"
+            if python -m aqt -c "$aqt_config" install-qt \
+              --timeout 120 --outputdir build/externals/qt \
+              windows desktop 6.6.0 win64_msvc2019_64 \
+              -m qtmultimedia --archives qttranslations qttools qtsvg qtbase; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Qt installation failed after three attempts."
+              exit 1
+            fi
+            rm -rf "$prefix"
+            sleep 5
+          done
+
+          test -f "$prefix/bin/qmake.exe"
+          ensure_qt_tool_aliases
+          test -f "$prefix/bin/windeployqt6.exe"
+          test -f "$prefix/bin/qtpaths6.exe"
+
+      - name: Install Qt 6.6.0 (macOS universal SDK)
+        if: runner.os == 'macOS'
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="build/externals/qt/6.6.0/macos"
+          ensure_qt_tool_aliases() {
+            # The Qt SDK ships macdeployqt without a version suffix on some
+            # hosts; BundleTarget.cmake looks for macdeployqt6.
+            if [[ ! -e "$prefix/bin/macdeployqt6" && -x "$prefix/bin/macdeployqt" ]]; then
+              ln -s macdeployqt "$prefix/bin/macdeployqt6"
+            fi
+          }
+
+          if [[ -x "$prefix/bin/qmake" && ( -x "$prefix/bin/macdeployqt6" || -x "$prefix/bin/macdeployqt" ) ]]; then
+            ensure_qt_tool_aliases
+            echo "Qt 6.6.0 is already present; reusing it."
+            exit 0
+          fi
+          rm -rf "$prefix"
+
+          python -m pip install --disable-pip-version-check --retries 5 --timeout 60 "aqtinstall==3.1.9"
+          aqt_config="$(mktemp)"
+          trap 'rm -f "$aqt_config"' EXIT
+          cp CMakeModules/aqt_config.ini "$aqt_config"
+          cat >> "$aqt_config" <<'EOF'
+          [requests]
+          connection_timeout: 120
+          response_timeout: 300
+          max_retries_on_connection_error: 5
+          retry_backoff: 5
+          EOF
+
+          for attempt in 1 2 3; do
+            echo "Qt installation attempt $attempt/3"
+            # Qt 6.6 macOS is distributed as the universal clang_64 SDK;
+            # CMake is configured separately for an arm64 application binary.
+            if python -m aqt -c "$aqt_config" install-qt \
+              --timeout 120 --outputdir build/externals/qt \
+              mac desktop 6.6.0 clang_64 \
+              -m qtmultimedia --archives qttranslations qttools qtsvg qtbase; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Qt installation failed after three attempts."
+              exit 1
+            fi
+            rm -rf "$prefix"
+            sleep 5
+          done
+
+          test -x "$prefix/bin/qmake"
+          ensure_qt_tool_aliases
+          test -x "$prefix/bin/macdeployqt6"
+
+      # ------------------------------------------------------------------
+      # Linux system dependencies. All emulator dependencies are vendored;
+      # only host development libraries and packaging tools come from APT.
+      # ------------------------------------------------------------------
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
             ninja-build \
-            patchelf file desktop-file-utils \
-            qt6-base-dev qt6-multimedia-dev \
+            patchelf file desktop-file-utils curl \
+            qt6-base-dev qt6-base-dev-tools qt6-base-private-dev qt6-multimedia-dev \
             libgl-dev libegl-dev \
             libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
             libx11-dev libxext-dev libxrandr-dev libxi-dev libxrender-dev \
-            libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev \
-            libxcursor-dev libxfixes-dev libxss-dev libxinerama-dev \
-            libxkbcommon-x11-dev libfuse2t64
+            libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev
 
-      # Configure
-      - name: Configure (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -o pipefail
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DENABLE_TESTS=OFF \
-            -DCITRA_WARNINGS_AS_ERRORS=OFF \
-            -DENABLE_LTO=OFF 2>&1 | tee configure.log
-
+      # ------------------------------------------------------------------
+      # Configure. Linux's CMAKE_DEPENDENT_OPTION already selects system Qt
+      # when the bundled-Qt option is unavailable on Linux.
+      # ------------------------------------------------------------------
       - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DENABLE_TESTS=OFF
+          -DCITRA_WARNINGS_AS_ERRORS=OFF
+          -DENABLE_LTO=OFF
+
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           -DENABLE_TESTS=OFF
           -DCITRA_WARNINGS_AS_ERRORS=OFF
           -DENABLE_LTO=OFF
 
       - name: Configure (macOS)
         if: runner.os == 'macOS'
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DENABLE_TESTS=OFF
+          -DCITRA_WARNINGS_AS_ERRORS=OFF
+          -DENABLE_LTO=OFF
+          -DENABLE_OPENGL=ON
+          -DENABLE_VULKAN=OFF
+          -DENABLE_SDL2_FRONTEND=OFF
+          -DENABLE_DEDICATED_ROOM=OFF
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+
+      # ------------------------------------------------------------------
+      # linuxdeploy is otherwise downloaded by a CMake POST_BUILD command,
+      # after the expensive compilation. Download it here with retries so
+      # network time is isolated and visible, then let BundleTarget.cmake
+      # reuse these exact files without downloading them again.
+      # ------------------------------------------------------------------
+      - name: Cache linuxdeploy and plugins (Linux)
+        id: linuxdeploy-cache
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: build/externals/linuxdeploy
+          key: citra-linuxdeploy-ubuntu-24.04-x86_64-v1
+
+      - name: Prepare linuxdeploy (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 45
         shell: bash
         run: |
-          set -o pipefail
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DENABLE_TESTS=OFF \
-            -DCITRA_WARNINGS_AS_ERRORS=OFF \
-            -DENABLE_LTO=OFF \
-            -DENABLE_OPENGL=ON \
-            -DENABLE_VULKAN=OFF 2>&1 | tee configure.log
+          set -euo pipefail
+          root="build/externals/linuxdeploy"
+          qt_app="$root/linuxdeploy-plugin-qt-x86_64.AppImage"
+          checkrt="$root/linuxdeploy-plugin-checkrt.sh"
+          deploy_app="$root/linuxdeploy-x86_64.AppImage"
 
-      # Build
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: cmake --build build --parallel --target citra-qt citra citra-room
+          # A restored cache is reusable only if the three downloads and the
+          # extracted linuxdeploy runtime are all present.
+          if [[ -s "$qt_app" && -s "$checkrt" && -s "$deploy_app" && -x "$root/squashfs-root/AppRun" ]]; then
+            echo "Reusing cached linuxdeploy and plugins."
+            exit 0
+          fi
 
-      - name: Build and bundle AppImages (Linux)
-        if: runner.os == 'Linux'
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: 1
-        run: cmake --build build --parallel --target bundle
+          rm -rf "$root"
+          mkdir -p "$root"
 
-      - name: Build (macOS)
-        if: runner.os == 'macOS'
-        run: cmake --build build --parallel --target citra-qt
+          download() {
+            local url="$1"
+            local destination="$2"
+            echo "Downloading: $url"
+            curl --fail --location --show-error --progress-bar \
+              --connect-timeout 30 --max-time 300 \
+              --retry 4 --retry-max-time 1200 --retry-all-errors --retry-delay 5 \
+              "$url" --output "$destination"
+          }
 
+          # Keep the same extraction order as BundleTarget.cmake: Qt plugin,
+          # checkrt plugin, then the main linuxdeploy AppImage.
+          download \
+            "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage" \
+            "$qt_app"
+          chmod +x "$qt_app"
+          (cd "$root" && ./linuxdeploy-plugin-qt-x86_64.AppImage --appimage-extract)
+
+          download \
+            "https://github.com/darealshinji/linuxdeploy-plugin-checkrt/releases/download/continuous/linuxdeploy-plugin-checkrt.sh" \
+            "$checkrt"
+          mkdir -p "$root/squashfs-root/usr/bin"
+          cp "$checkrt" "$root/squashfs-root/usr/bin/linuxdeploy-plugin-checkrt.sh"
+          chmod +x "$root/squashfs-root/usr/bin/linuxdeploy-plugin-checkrt.sh"
+
+          download \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
+            "$deploy_app"
+          chmod +x "$deploy_app"
+          (cd "$root" && ./linuxdeploy-x86_64.AppImage --appimage-extract)
+
+          test -x "$root/squashfs-root/AppRun"
+          test -x "$root/squashfs-root/usr/bin/linuxdeploy-plugin-checkrt.sh"
+          test -s "$root/linuxdeploy-plugin-qt-x86_64.AppImage"
+
+      # ------------------------------------------------------------------
+      # Build through the repository's own `bundle` target on every OS.
+      # This is important: it runs windeployqt/macdeployqt and creates the
+      # Linux AppImages in the paths expected by the packaging steps below.
+      # ------------------------------------------------------------------
+      - name: Build distributable bundles
+        run: cmake --build build --parallel 2 --target bundle
+
+      # ------------------------------------------------------------------
       # Package
+      # ------------------------------------------------------------------
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $pkg = "pkg-out/citra"
-          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
-          robocopy build/bin/Release $pkg /E /XF *.pdb *.ilk *.exp *.lib | Out-Null
-          if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
-          Copy-Item README.md, license.txt $pkg
+          $ErrorActionPreference = "Stop"
+          $source = "build/bundle"
+          $destination = "pkg-out/citra-windows-x64-$env:CITRA_VERSION.zip"
+          $expected = @("citra-qt.exe", "citra.exe", "citra-room.exe")
+
+          foreach ($file in $expected) {
+            if (-not (Test-Path (Join-Path $source $file))) {
+              throw "Missing bundled executable: $file"
+            }
+          }
+
           New-Item -ItemType Directory -Force -Path pkg-out | Out-Null
-          Compress-Archive -Path "$pkg/*" `
-            -DestinationPath "pkg-out/citra-windows-x64-$env:CITRA_VERSION.zip" -Force
-          Get-ChildItem pkg-out
+          Compress-Archive -Path "$source/*" -DestinationPath $destination -Force
+          Get-ChildItem pkg-out | Format-Table Name, Length
 
       - name: Package AppImages (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p pkg-out
-          cp build/bundle/*.AppImage pkg-out/
+          shopt -s nullglob
+          appimages=(build/bundle/*.AppImage)
+          if [[ "${#appimages[@]}" -ne 3 ]]; then
+            echo "Expected 3 AppImages, found ${#appimages[@]}"
+            printf '%s\n' "${appimages[@]}"
+            exit 1
+          fi
+          cp "${appimages[@]}" pkg-out/
           ls -lh pkg-out/
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
-        run: |
-          set -e
-          app="build/bin/Release/citra-qt.app"
-          macdeployqt="$(find build/externals/qt -name 'macdeployqt*' -path '*bin*' | head -1)"
-          test -n "$macdeployqt" || { echo "macdeployqt not found in cached/downloaded Qt"; exit 1; }
-          echo "Using macdeployqt at: $macdeployqt"
-          "$macdeployqt" "$app" -always-overwrite -sign="-"
-          mkdir -p pkg-out
-          ditto -c -k --keepParent "$app" "pkg-out/citra-macos-arm64-$CITRA_VERSION.zip"
-          ls -lh pkg-out/
-
-      # Diagnostic en cas d'échec
-      - name: Show CMake errors on failure
-        if: failure()
         shell: bash
         run: |
-          if [ -f configure.log ]; then
-            echo "===== CMake Error (configure.log) ====="
-            grep -n -B3 -A15 -E "CMake Error|Git submodule|Compatibility with CMake" configure.log | head -n 150 || true
-            echo "===== Fin de configure.log ====="
-            tail -n 40 configure.log
-          fi
-          tail -n 60 build/CMakeFiles/CMakeConfigureLog.yaml 2>/dev/null || true
-          tail -n 60 build/CMakeFiles/CMakeError.log 2>/dev/null || true
+          set -euo pipefail
+          app="build/bundle/citra-qt.app"
+          test -d "$app" || { echo "Missing bundled app: $app"; exit 1; }
+          app_binary="$app/Contents/MacOS/citra-qt"
+          test -f "$app_binary" || { echo "Missing app executable: $app_binary"; exit 1; }
+          lipo -archs "$app_binary" | grep -q arm64 || { echo "App bundle is not arm64."; exit 1; }
+          mkdir -p pkg-out
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$app" "pkg-out/citra-macos-arm64-$CITRA_VERSION.zip"
+          ls -lh pkg-out/
 
-      # Upload artifacts
+      # ------------------------------------------------------------------
+      # Upload one artifact per platform on every push / pull request.
+      # ------------------------------------------------------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -218,7 +393,6 @@ jobs:
           compression-level: 0
           retention-days: 90
 
-  # Release
   release:
     name: Create release
     if: github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
@@ -249,18 +423,14 @@ jobs:
 
             - New **Fusion** screen layout: the primary screen is stretched to a
               full 16:9 view and the secondary screen is overlaid on top of it as
-              a minimap in the top-right corner. Select it via
-              *View → Screen Layout → Fusion*, the layout hotkey, or
-              *Emulation → Configure → Enhancements*.
+              a minimap in the top-right corner.
             - Builds for **Windows (x64)**, **Linux (x64 AppImage)** and
-              **macOS (Apple Silicon)**, including the `citra` SDL frontend and
-              `citra-room` on Windows, and portable AppImages on Linux.
+              **macOS (Apple Silicon)**.
 
             **Notes**
 
             - On Windows, video dumping requires FFmpeg DLLs (FFmpeg 5 or newer,
-              e.g. from https://www.gyan.dev/ffmpeg/builds/) placed next to
-              `citra-qt.exe`; the emulator itself runs without them.
-            - The Linux AppImage was built on Ubuntu 24.04 with a static SDL2.
-            - macOS uses the OpenGL renderer (Vulkan/MoltenVK is not enabled in
-              this build).
+              for example from https://www.gyan.dev/ffmpeg/builds/) placed next
+              to `citra-qt.exe`; the emulator itself runs without them.
+            - Linux AppImages are built on Ubuntu 24.04 with vendored static SDL2.
+            - macOS uses the OpenGL renderer (Vulkan/MoltenVK is disabled in this build).
