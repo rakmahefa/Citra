@@ -480,7 +480,7 @@ if(NOT CLANG_FORMAT_BINARY)
 set(CLANG_FORMAT_BINARY clang-format)
 endif()
 
-add_custom_target(clang-format-check
+add_custom_target(cubeb-clang-format-check
   find
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -494,7 +494,7 @@ add_custom_target(clang-format-check
   COMMENT "Check formatting with clang-format"
   VERBATIM)
 
-add_custom_target(clang-format
+add_custom_target(cubeb-clang-format
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run-clang-format.sh ${CMAKE_CURRENT_SOURCE_DIR} ${CLANG_FORMAT_BINARY}
   COMMENT "Formatting C and C++ with clang-format"
   VERBATIM)
